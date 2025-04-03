@@ -1,9 +1,9 @@
 
 from sqlalchemy.orm import Session
-from util import models, database
+import models, database
 from datetime import timedelta,datetime,date
 import ipaddress
-from . import models
+import models
 
 
 class RuleTypes:
@@ -13,6 +13,7 @@ class RuleTypes:
         self.redundant = set()
         self.shadow = set()
         self.unused = set()
+        self.unused_objects = set()
         self.dst_excessiveopen = set()
         self.port_excessiveopen = set()
         self.knownportopen = set()
@@ -80,7 +81,7 @@ def parseIPs(rules):
 
 
 
-def analyze(rules, analyses, complianceObjects):
+def analyze(rules, analyses, complianceObjects, db):
     ruleIPs = parseIPs(rules)
 
     types = RuleTypes()
@@ -103,8 +104,12 @@ def analyze(rules, analyses, complianceObjects):
             types.permanent.add(rule.id) 
 
         # UNUSED
-        if check_unused(rule):
+        if check_unused(rule, db):
             types.unused.add(rule.id) 
+
+        # UNUSED OBJECTS
+        if check_unused_objects(rule):
+            types.unused_objects.add(rule.id)
 
         # DST_EXCESSIVEOPEN
         if check_dst_excessiveopen(rule):
@@ -218,11 +223,14 @@ def check_shadow(ruleIPs, idx):
     return False
 
 
-def check_unused(rule):
-    # print(rule)
+def check_unused(rule, db):
+    if len(db.query(models.SysLog).filter(models.SysLog.policyid == str(rule.id)).all()) > 0:
+        return False
 
-    # NEED TO IMPLEMENT USING SYSLOGS
+    return True
 
+
+def check_unused_objects(rule):
     return False
 
 

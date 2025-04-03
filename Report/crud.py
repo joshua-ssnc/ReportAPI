@@ -1,12 +1,19 @@
+import sys
+
+sys.path.append('..//Report')
+
 
 from sqlalchemy.orm import Session
-from util import models, database
+import models, database
 from datetime import timedelta,datetime
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Side, Border, Alignment
 from io import BytesIO
-from . import schemas, check_rulebase
+from typing import Union
+import schemas, check_rulebase
+from collections import defaultdict
+
 
 # openpyxl border styles
 BORDER_NONE = None
@@ -39,8 +46,12 @@ def get_firewall(db: Session, firewall_id: int):
     return db.query(models.Firewall).filter(models.Firewall.id == firewall_id).first()
 
 # Get all firewalls
-def get_firewalls(db: Session, skip: int = 0, limit: int = 10):
+def get_firewalls(db: Session, fw_ids: Union[list[int], None], skip: int = 0, limit: int = 10):
+    if fw_ids != None:
+        return db.query(models.Firewall).filter(models.Firewall.id.in_(fw_ids)).all()
+
     return db.query(models.Firewall).all()
+        
 
 def get_rule(db: Session, rule_id: int):
     return db.query(models.Rule).filter(models.Rule.id == rule_id).first()
@@ -48,19 +59,85 @@ def get_rule(db: Session, rule_id: int):
 def get_rules(db: Session, fw_id: int):
     return db.query(models.Rule).filter(models.Rule.fw_id == fw_id).all()
 
+def get_log(db: Session, log_id: int):
+    return db.query(models.SysLog).filter(models.SysLog.id == log_id).first()
+
 def analyze_rules(db: Session, fw_id: int):
     rules = db.query(models.Rule).filter(models.Rule.fw_id == fw_id).all()
     analyses = db.query(models.Analyze).filter(models.Analyze.fw_id == fw_id).all()
     complianceObjects = db.query(models.ComplianceObject).filter(models.ComplianceObject.type == "wn" or models.ComplianceObject.type == "vi" or models.ComplianceObject.type == "mn").all()
 
-    return check_rulebase.analyze(rules, analyses, complianceObjects)
+    return check_rulebase.analyze(rules, analyses, complianceObjects, db)
+
 
     # return(schemas.RuleAnalysis(fw_id='1', rules_count={}))
+
+
+def generate_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
+    ruletypes = ['expired','permanent','redundant','shadow','unused', 'unused_objects', 'dst_excessiveopen', 'port_excessiveopen', 'knownportopen', 'virusportopen', 'mgmtportopen', 'src_anyopen', 'dst_anyopen', 'noevidence', 'compliancecheck', 'disabled', 'invalid', 'manual']
+    ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
+
+    if firewall_id == -1:
+        all_firewalls = get_firewalls(db, None)
+        firewalls = get_firewalls(db, fw_ids)
+
+        firewallReport = {"idToName": {}, "requestedFwData": {}}
+
+        if not firewalls:
+            raise Exception("No firewall data found")
+        
+        for firewall in all_firewalls:
+            if fw_ids is None or firewall.id in fw_ids:
+                firewallData = analyze_rules(db, firewall.id)
+
+                for ruletype in ruletypes:
+                    setattr(firewallData, ruletype, len(getattr(firewallData, ruletype)))
+                setattr(firewallData, "name", firewall.name)
+                
+                firewallReport["requestedFwData"][firewall.id] = firewallData
+
+            firewallReport["idToName"][firewall.id] = firewall.name
+        
+        return firewallReport
+    
+    # we are generating report data for an individual firewall
+    rules = get_rules(db, firewall_id)
+    ruleAnalysis = analyze_rules(db, firewall_id)
+
+    individualReport = { "fw_name": get_firewall(db, firewall_id).fw_name }
+    analyzedRules = []
+
+    for rule in rules:  # Start from row 2, as row 1 is for headers
+        newRule = {}
+        newRule["id"] = rule.id
+        newRule["action"] = rule.action
+        newRule["source"] = rule.source
+        newRule["from_ip"] = rule.from_ip
+        newRule["destination"] = rule.destination
+        newRule["to_ip"] = rule.to_ip
+        newRule["service"] = rule.service
+        newRule["expire"] = rule.expire
+        newRule["comment"] = rule.comment
+        newRule["types"] = []
+
+        for type, ruleSet in vars(ruleAnalysis).items():
+            if len(ruleSet) > 0 and rule.id in ruleSet:
+                newRule["types"].append(type)
+        
+        analyzedRules.append(newRule)
+    
+    individualReport["rules"] = analyzedRules
+
+    return individualReport
+
+
+        
+
 
     
 def generate_firewall_report(db: Session):
     # Fetch firewall data from the database
-    firewalls = get_firewalls(db)
+    firewalls = get_firewalls(db, None)
     endCol = get_column_letter(3 + len(firewalls))
 
     if not firewalls:
@@ -76,8 +153,8 @@ def generate_firewall_report(db: Session):
     # Define headers for the Excel report
     individualHeaders = ["Rule ID", "Rule Type", "Source IP", "Source Zone", "Destination IP", "Destination Zone", "Service", "Expiration", "Comment", "Report Details"]
     
-    ruletypeRows = {4: 'expired', 5: 'permanent', 6: 'redundant', 7: 'shadow', 9: 'unused', 12: 'dst_excessiveopen', 13: 'port_excessiveopen', 14: 'knownportopen', 15: 'virusportopen', 16: 'mgmtportopen', 17: 'src_anyopen', 18: 'dst_anyopen', 21: 'noevidence', 22: 'compliancecheck', 30: 'disabled', 31: 'invalid', 32: 'manual'}
-    ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
+    ruletypeRows = {4: 'expired', 5: 'permanent', 6: 'redundant', 7: 'shadow', 9: 'unused', 10: 'unused_objects', 12: 'dst_excessiveopen', 13: 'port_excessiveopen', 14: 'knownportopen', 15: 'virusportopen', 16: 'mgmtportopen', 17: 'src_anyopen', 18: 'dst_anyopen', 21: 'noevidence', 22: 'compliancecheck', 30: 'disabled', 31: 'invalid', 32: 'manual'}
+    ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
     
     alignment = Alignment(horizontal="center", vertical="center")
     ws["A1"] = "Category"
@@ -122,17 +199,17 @@ def generate_firewall_report(db: Session):
     ws["B21"] = "NOEVIDENCE Rule"
     ws["B22"] = "Compliance"
     ws["B23"] = "Deny Rule"
-    ws["B24"] = "Policy 가장 오랜 만료 기간 확인"
-    ws["B25"] = "Policy 가장 최근 만료 기간 확인"
+    ws["B24"] = "Check Longest Expiration Period"
+    ws["B25"] = "Check Most Recent Expiration Period"
     ws["B26"] = "NORENEW Check Status"
-    ws["B27"] = "상태 확인"
-    ws["B28"] = "그룹별 정책 등록 확인 "
-    ws["B29"] = "Composition 확인"
+    ws["B27"] = "Check Status"
+    ws["B28"] = "Check Group-Specific Policy Registration"
+    ws["B29"] = "Check Composition"
     ws["B30"] = "Inactive Rule"
     ws["B31"] = "Invalid Rule"
     ws["B32"] = "Manual Rule"
-    ws["B33"] = "등록된 정보 없는 정책"
-    ws["B34"] = "Zone없는 정책"
+    ws["B33"] = "Unregistered Rule"
+    ws["B34"] = "No Zone Rule"
     ws[f"{endCol}3"] = "Total"
     ws[f"{endCol}3"].font = Font(bold=True)
 

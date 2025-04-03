@@ -1,6 +1,6 @@
 
 from sqlalchemy import Column, Integer, String, DateTime, CheckConstraint
-from .database import Base
+from database import Base
 
 class Firewall(Base):
     __tablename__ = "argos_firewall_list"
@@ -72,3 +72,34 @@ class ComplianceObject(Base):
     category = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     ts = Column(DateTime)
+
+
+class SysLog(Base):
+    __tablename__ = "argos_syslog"
+
+    id = Column(Integer, primary_key=True)
+    seq = Column(Integer)
+    devid = Column(String)
+    eventtime = Column(DateTime)
+    logid = Column(String)
+    type = Column(String)
+    subtype = Column(String)
+    level = Column(String)
+    srcip = Column(Integer)
+    srcport = Column(Integer)
+    dstip = Column(Integer)
+    dstport = Column(Integer)
+    dstintf = Column(String)
+    policyid = Column(String, index=True)
+    policytype = Column(String, nullable=True)
+    sessionid = Column(String)
+    service = Column(String)
+    duration = Column(Integer)
+    sentbyte = Column(Integer)
+    rcvdbyte = Column(Integer)
+    srccountry = Column(String)
+    dstcountry = Column(String)
+    action = Column(String)
+    app = Column(String, nullable=True)
+    hostname = Column(String, nullable=True)
+    apprisk = Column(String, nullable=True)

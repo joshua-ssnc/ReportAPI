@@ -69,3 +69,10 @@ class RuleAnalysis(BaseModel):
 
     class Config:
         use_enum_values = True
+
+
+class FirewallAnalysis(BaseModel):
+    firewalls: Dict[int, Dict[RuleType, int]]
+
+    class Config:
+        use_enum_values = True
