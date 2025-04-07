@@ -67,7 +67,7 @@ def analyze_rules(db: Session, fw_id: int):
     analyses = db.query(models.Analyze).filter(models.Analyze.fw_id == fw_id).all()
     complianceObjects = db.query(models.ComplianceObject).filter(models.ComplianceObject.type == "wn" or models.ComplianceObject.type == "vi" or models.ComplianceObject.type == "mn").all()
 
-    return check_rulebase.analyze(rules, analyses, complianceObjects, db)
+    return check_rulebase.analyze(rules, analyses, complianceObjects, fw_id, db)
 
 
     # return(schemas.RuleAnalysis(fw_id='1', rules_count={}))

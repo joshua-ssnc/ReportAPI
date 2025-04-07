@@ -1,9 +1,10 @@
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import aliased
+from sqlalchemy import String, cast
 import models, database
-from datetime import timedelta,datetime,date
+from datetime import datetime
 import ipaddress
-import models
+from models import SysLog, Rule
 
 
 class RuleTypes:
@@ -81,7 +82,7 @@ def parseIPs(rules):
 
 
 
-def analyze(rules, analyses, complianceObjects, db):
+def analyze(rules, analyses, complianceObjects, fw_id, db):
     ruleIPs = parseIPs(rules)
 
     types = RuleTypes()
@@ -102,10 +103,6 @@ def analyze(rules, analyses, complianceObjects, db):
         # PERMANENT
         if check_permanent(rule):
             types.permanent.add(rule.id) 
-
-        # UNUSED
-        if check_unused(rule, db):
-            types.unused.add(rule.id) 
 
         # UNUSED OBJECTS
         if check_unused_objects(rule):
@@ -158,6 +155,10 @@ def analyze(rules, analyses, complianceObjects, db):
         # MANUAL 
         if check_manual(rule):
             types.manual.add(rule.id) 
+
+    # UNUSED
+    types.unused.update(retrieve_unused(db, fw_id))
+
 
     seenRules = {}
     for idx, rule in enumerate(ruleIPs):
@@ -223,11 +224,9 @@ def check_shadow(ruleIPs, idx):
     return False
 
 
-def check_unused(rule, db):
-    if len(db.query(models.SysLog).filter(models.SysLog.policyid == str(rule.id)).all()) > 0:
-        return False
-
-    return True
+def retrieve_unused(db, fw_id):
+    unusedRulesQuery = db.query(Rule.id).outerjoin(SysLog, cast(Rule.id, String) == SysLog.policyid).filter(Rule.fw_id == fw_id).filter(SysLog.id == None).all()
+    return [unusedRule.id for unusedRule in unusedRulesQuery]
 
 
 def check_unused_objects(rule):
