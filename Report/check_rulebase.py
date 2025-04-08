@@ -270,7 +270,45 @@ def retrieve_unused_objects(db, fw_id):
 
     syslog_alias = aliased(syslogs, name='syslog_alias')
 
-    analysisQuery = db.query(Analyze.rulebase_id).outerjoin(syslog_alias, 
+    existenceSubquery = db.query(syslog_alias).filter(
+        and_(
+            cast(Analyze.rulebase_id, String) == syslog_alias.c.policyid,
+            or_(
+                # For rules that deal with ports/protocols (ctype 0 and 1)
+                and_(
+
+                    Analyze.ctype.in_([0, 1]),  # Type 0 or 1: ports and protocols
+                    or_(
+                        and_(
+                            Analyze.ctype == 0,
+                            syslog_alias.c.protocol == 'tcp'
+                        ),
+                        and_(
+                            Analyze.ctype == 1,
+                            syslog_alias.c.protocol == 'udp'
+                        )
+                    ),
+                    # checks if syslog port is in range
+                    syslog_alias.c.port.between(Analyze.start_object, Analyze.end_object)
+    
+                ),
+                # For rules that deal with source IP addresses (ctype 2)
+                and_(
+                    Analyze.ctype == 2,  # Type 2: Source IP address
+                    syslog_alias.c.srcip.between(Analyze.start_object, Analyze.end_object)
+                ),
+                # For rules that deal with destination IP addresses (ctype 3)
+                and_(
+                    Analyze.ctype == 3,  # Type 3: Destination IP address
+                    # Destination IP range match (ctype 3)
+                    syslog_alias.c.dstip.between(Analyze.start_object, Analyze.end_object),
+                )
+            )
+        )
+    ).subquery()
+
+
+    analysis = db.query(Analyze.rulebase_id).outerjoin(syslog_alias, 
         and_(
             cast(Analyze.rulebase_id, String) == syslog_alias.c.policyid,
             or_(
@@ -307,9 +345,19 @@ def retrieve_unused_objects(db, fw_id):
         )
     ).filter(and_(Analyze.fw_id == fw_id, syslog_alias.c.id == None)).distinct().all()  # Use distinct to only return unique rulebase_id values
 
-    # TODO: TRY TO OPTIMIZE USING exists() instead of performing a full join
+    # TODO: TRY TO OPTIMIZE USING exists() for short circuit evaluation
+    optimizedAnalysis = db.query(Analyze.rulebase_id).filter(
+        and_(
+            Analyze.fw_id == fw_id,
+            # ~exists(existenceSubquery)
+        )
+    ).distinct().all()
 
-    return [analysis.rulebase_id for analysis in analysisQuery]
+    print(optimizedAnalysis)
+
+    return []
+
+    # return [x.rulebase_id for x in analysis]
 
 
 
