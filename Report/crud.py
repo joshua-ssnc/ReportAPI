@@ -75,8 +75,9 @@ def analyze_rules(db: Session, fw_id: int):
 
 def generate_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
     ruletypes = ['expired','permanent','redundant','shadow','unused', 'unused_objects', 'dst_excessiveopen', 'port_excessiveopen', 'knownportopen', 'virusportopen', 'mgmtportopen', 'src_anyopen', 'dst_anyopen', 'noevidence', 'compliancecheck', 'disabled', 'invalid', 'manual']
-    ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
+    # ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
 
+    # The report will include all firewalls
     if firewall_id == -1:
         all_firewalls = get_firewalls(db, None)
         firewalls = get_firewalls(db, fw_ids)

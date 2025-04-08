@@ -73,6 +73,32 @@ class ComplianceObject(Base):
     comment = Column(String, nullable=True)
     ts = Column(DateTime)
 
+class Service(Base):
+    __tablename__ = "argos_service"
+
+    id = Column(Integer, primary_key=True)
+    fw_id = Column(Integer, index=True)
+    name = Column(String, index=True, unique=True)
+    rivision = Column(Integer, CheckConstraint('rivision == -1 or rivision == 0', name='check_rivision'), nullable=True)
+    deleted = Column(Integer, nullable=True)
+    sync = Column(Integer, nullable=True)
+    ts = Column(DateTime, nullable=True)
+    protocol = Column(String, nullable=True, index=True)
+    member = Column(String, nullable=True, index=True)
+
+
+class Address(Base):
+    __tablename__ = "argos_address"
+
+    id = Column(Integer, primary_key=True)
+    fw_id = Column(Integer, index=True)
+    name = Column(String, unique=True)
+    rivision = Column(Integer, CheckConstraint('rivision == -1 or rivision == 0', name='check_rivision'), nullable=True)
+    member = Column(String, nullable=True)
+    deleted = Column(Integer, nullable=True)
+    sync = Column(Integer, nullable=True)
+    ts = Column(DateTime, nullable=True)
+
 
 class SysLog(Base):
     __tablename__ = "argos_syslog"
@@ -85,15 +111,15 @@ class SysLog(Base):
     type = Column(String)
     subtype = Column(String)
     level = Column(String)
-    srcip = Column(Integer)
+    srcip = Column(Integer, index=True)
     srcport = Column(Integer)
-    dstip = Column(Integer)
+    dstip = Column(Integer, index=True)
     dstport = Column(Integer)
     dstintf = Column(String)
     policyid = Column(String, index=True)
     policytype = Column(String, nullable=True)
     sessionid = Column(String)
-    service = Column(String)
+    service = Column(String, index=True)
     duration = Column(Integer)
     sentbyte = Column(Integer)
     rcvdbyte = Column(Integer)

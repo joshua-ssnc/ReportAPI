@@ -1,10 +1,10 @@
-
+import re
 from sqlalchemy.orm import aliased
-from sqlalchemy import String, cast
+from sqlalchemy import Integer, String, cast, func, case, literal, and_, or_, not_, exists
 import models, database
 from datetime import datetime
 import ipaddress
-from models import SysLog, Rule
+from models import SysLog, Rule, Service, Address, Analyze
 
 
 class RuleTypes:
@@ -29,6 +29,23 @@ class RuleTypes:
         self.manual = set()
 
 
+def is_valid_cidr(cidr):
+    # Check if the input is a valid CIDR format
+    cidr_pattern = r'^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
+    return re.match(cidr_pattern, cidr) is not None
+
+def is_valid_ip_range(ip_range):
+    # Check if the input is a valid IP range format
+    range_pattern = r'^([0-9]{1,3}\.){3}[0-9]{1,3}-([0-9]{1,3}\.){3}[0-9]{1,3}$'
+    return re.match(range_pattern, ip_range) is not None
+
+def is_valid_ip_list(ip_list):
+    # Check if the input is a valid list of IP addresses
+    ip_list_pattern = r'^([0-9]{1,3}\.){3}[0-9]{1,3}(,([0-9]{1,3}\.){3}[0-9]{1,3})*$'
+    return re.match(ip_list_pattern, ip_list) is not None
+
+
+
 def parseIPRange(range_str):
     # IP range in format 'start_ip-end_ip'
 
@@ -51,7 +68,52 @@ def parseIPList(list_str):
     return {ipaddress.IPv4Address(ip.strip()[3:]) for ip in ip_list}
 
 
-def parseIPs(rules):
+
+
+def addressparseIPRange(range_str):
+    # IP range in format 'start_ip-end_ip'
+
+    start_ip_str, end_ip_str = range_str.split('-')
+    start_ip = ipaddress.IPv4Address(start_ip_str)
+    end_ip = ipaddress.IPv4Address(end_ip_str)
+    
+    # Generate the IPs in the range
+    return {ipaddress.IPv4Address(ip) for ip in range(int(start_ip), int(end_ip) + 1)}
+
+def addressparseCIDR(cidr_str):
+    # IP range in format '192.168.1.0/24'
+    
+    network = ipaddress.IPv4Network(cidr_str, strict=False)
+    return set(network.hosts()) | {network.network_address, network.broadcast_address}
+
+
+def addressparseIPList(list_str):
+    ip_list = list_str.split(',')
+    return {ipaddress.IPv4Address(ip.strip()) for ip in ip_list}
+
+
+
+
+
+def parseAddressMembers(members):
+    addressIPs = set()
+
+    for member in members:
+        if is_valid_ip_list(member): # It's a list of IPs
+            addressIPs.update(addressparseIPList(member))
+        elif is_valid_ip_range(member):  # It's a range of IPs
+            addressIPs.update(addressparseIPRange(member))
+        elif is_valid_cidr(member):  # It's a CIDR
+            addressIPs.update(addressparseCIDR(member))
+        else:  # It's a single IP ro domain 
+            addressIPs.add(member)
+        
+    return addressIPs
+            
+
+
+
+def parseRuleIPs(rules):
     ruleIPs = []
 
     for rule in rules:
@@ -83,15 +145,25 @@ def parseIPs(rules):
 
 
 def analyze(rules, analyses, complianceObjects, fw_id, db):
-    ruleIPs = parseIPs(rules)
+    ruleIPs = parseRuleIPs(rules)
 
     types = RuleTypes()
 
-    for rule in rules:
-        ruleAnalysesPorts = list(filter(lambda r : r.rulebase_id == rule.id and r.ctype == 0, analyses))
+    analyzeQuery = db.query(Analyze).filter(Analyze.fw_id == fw_id)
 
-        ruleAnalysesSource = list(filter(lambda r : r.rulebase_id == rule.id and r.ctype == 2, analyses))
-        ruleAnalysesDest = list(filter(lambda r : r.rulebase_id == rule.id and r.ctype == 3, analyses))
+    for rule in rules:
+        # THIS IS BETTER FOR SMALLER DATASETS
+        # ruleAnalysesPorts = list(filter(lambda r : r.rulebase_id == rule.id and r.ctype == 0, analyses))
+
+        # ruleAnalysesSource = list(filter(lambda r : r.rulebase_id == rule.id and r.ctype == 2, analyses))
+        # ruleAnalysesDest = list(filter(lambda r : r.rulebase_id == rule.id and r.ctype == 3, analyses))
+
+        # OPTIMIZING FOR LARGER DATASETS
+        analyzeQuery = db.query(Analyze).filter(Analyze.fw_id == fw_id)
+
+        ruleAnalysesPorts = analyzeQuery.filter(Analyze.rulebase_id == rule.id and Analyze.ctype == 0).all()
+        ruleAnalysesSource = analyzeQuery.filter(Analyze.rulebase_id == rule.id and Analyze.ctype == 2).all()
+        ruleAnalysesDest = analyzeQuery.filter(Analyze.rulebase_id == rule.id and Analyze.ctype == 3).all()
 
         ruleSources = sorted([(a.start_object, a.end_object) for a in ruleAnalysesSource])
         ruleDests = sorted([(a.start_object, a.end_object) for a in ruleAnalysesDest])
@@ -105,7 +177,7 @@ def analyze(rules, analyses, complianceObjects, fw_id, db):
             types.permanent.add(rule.id) 
 
         # UNUSED OBJECTS
-        if check_unused_objects(rule):
+        if check_unused_objects(db, fw_id, rule.id):
             types.unused_objects.add(rule.id)
 
         # DST_EXCESSIVEOPEN
@@ -156,8 +228,10 @@ def analyze(rules, analyses, complianceObjects, fw_id, db):
         if check_manual(rule):
             types.manual.add(rule.id) 
 
-    # UNUSED
+    # UNUSED RULES AND OBJECTS
     types.unused.update(retrieve_unused(db, fw_id))
+
+    types.unused_objects.update(retrieve_unused_objects(db, fw_id))
 
 
     seenRules = {}
@@ -173,6 +247,76 @@ def analyze(rules, analyses, complianceObjects, fw_id, db):
     return types
 
 
+
+def retrieve_unused_objects(db, fw_id):
+    # Query to transform the SysLog "service" column into separate protocol and port columns 
+    syslogs = db.query(
+        SysLog.id,
+        SysLog.policyid,
+        SysLog.srcip,
+        SysLog.dstip,
+        case(
+            (SysLog.service.like('tcp/%') | SysLog.service.like('udp/%'), func.substr(SysLog.service, 1, func.position(literal('/').op('IN')(SysLog.service)) - 1)),  # Extract protocol
+            else_=Service.protocol
+        ).label('protocol'),
+        
+        case(
+            (SysLog.service.like('tcp/%') | SysLog.service.like('udp/%'), cast(func.substr(SysLog.service, func.position(literal('/').op('IN')(SysLog.service)) + 1, 5), Integer)),  # Extract port
+            else_=SysLog.dstport
+        ).label('port'),
+    ).outerjoin(
+        Service, SysLog.service == Service.name  # Outer join if the service name matches a service
+    ).subquery()
+
+    syslog_alias = aliased(syslogs, name='syslog_alias')
+
+    analysisQuery = db.query(Analyze.rulebase_id).outerjoin(syslog_alias, 
+        and_(
+            cast(Analyze.rulebase_id, String) == syslog_alias.c.policyid,
+            or_(
+                # For rules that deal with ports/protocols (ctype 0 and 1)
+                and_(
+
+                    Analyze.ctype.in_([0, 1]),  # Type 0 or 1: ports and protocols
+                    or_(
+                        and_(
+                            Analyze.ctype == 0,
+                            syslog_alias.c.protocol == 'tcp'
+                        ),
+                        and_(
+                            Analyze.ctype == 1,
+                            syslog_alias.c.protocol == 'udp'
+                        )
+                    ),
+                    # checks if syslog port is in range
+                    syslog_alias.c.port.between(Analyze.start_object, Analyze.end_object)
+    
+                ),
+                # For rules that deal with source IP addresses (ctype 2)
+                and_(
+                    Analyze.ctype == 2,  # Type 2: Source IP address
+                    syslog_alias.c.srcip.between(Analyze.start_object, Analyze.end_object)
+                ),
+                # For rules that deal with destination IP addresses (ctype 3)
+                and_(
+                    Analyze.ctype == 3,  # Type 3: Destination IP address
+                    # Destination IP range match (ctype 3)
+                    syslog_alias.c.dstip.between(Analyze.start_object, Analyze.end_object),
+                )
+            )
+        )
+    ).filter(and_(Analyze.fw_id == fw_id, syslog_alias.c.id == None)).distinct().all()  # Use distinct to only return unique rulebase_id values
+
+    # TODO: TRY TO OPTIMIZE USING exists() instead of performing a full join
+
+    return [analysis.rulebase_id for analysis in analysisQuery]
+
+
+
+def retrieve_unused_addresses(db, fw_id):
+    addresses = db.query(Address.member).filter(Address.fw_id == fw_id).all()
+    
+    return [address.member for address in addresses]
 
 # TODO: check rivions=0 rule for all of these
 
@@ -229,8 +373,9 @@ def retrieve_unused(db, fw_id):
     return [unusedRule.id for unusedRule in unusedRulesQuery]
 
 
-def check_unused_objects(rule):
-    return False
+
+def check_unused_objects(db, fw_id, rule_id):
+    portAnalysis = db.query(Analyze).filter(Analyze.fw_id == fw_id)
 
 
 def check_dst_excessiveopen(rule):
