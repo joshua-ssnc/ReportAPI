@@ -270,7 +270,7 @@ def retrieve_unused_objects(db, fw_id):
 
     syslog_alias = aliased(syslogs, name='syslog_alias')
 
-    existenceSubquery = db.query(syslog_alias).filter(
+    existenceSubquery = db.query(syslog_alias.c.policyid).filter(
         and_(
             cast(Analyze.rulebase_id, String) == syslog_alias.c.policyid,
             or_(
@@ -290,7 +290,7 @@ def retrieve_unused_objects(db, fw_id):
                     ),
                     # checks if syslog port is in range
                     syslog_alias.c.port.between(Analyze.start_object, Analyze.end_object)
-    
+
                 ),
                 # For rules that deal with source IP addresses (ctype 2)
                 and_(
@@ -305,10 +305,10 @@ def retrieve_unused_objects(db, fw_id):
                 )
             )
         )
-    ).subquery()
+    ).exists()
 
 
-    analysis = db.query(Analyze.rulebase_id).outerjoin(syslog_alias, 
+    analysisQuery = db.query(Analyze.rulebase_id).outerjoin(syslog_alias, 
         and_(
             cast(Analyze.rulebase_id, String) == syslog_alias.c.policyid,
             or_(
@@ -326,7 +326,7 @@ def retrieve_unused_objects(db, fw_id):
                             syslog_alias.c.protocol == 'udp'
                         )
                     ),
-                    # checks if syslog port is in range
+                    # Checks if syslog port is in range
                     syslog_alias.c.port.between(Analyze.start_object, Analyze.end_object)
     
                 ),
@@ -338,33 +338,25 @@ def retrieve_unused_objects(db, fw_id):
                 # For rules that deal with destination IP addresses (ctype 3)
                 and_(
                     Analyze.ctype == 3,  # Type 3: Destination IP address
-                    # Destination IP range match (ctype 3)
                     syslog_alias.c.dstip.between(Analyze.start_object, Analyze.end_object),
                 )
             )
         )
-    ).filter(and_(Analyze.fw_id == fw_id, syslog_alias.c.id == None)).distinct().all()  # Use distinct to only return unique rulebase_id values
+    ).filter(and_(Analyze.fw_id == fw_id, syslog_alias.c.id == None)).distinct()
 
-    # TODO: TRY TO OPTIMIZE USING exists() for short circuit evaluation
+    # Uses exists() for short circuit evaluation
     optimizedAnalysis = db.query(Analyze.rulebase_id).filter(
         and_(
             Analyze.fw_id == fw_id,
-            # ~exists(existenceSubquery)
+            ~existenceSubquery
         )
     ).distinct().all()
 
-    print(optimizedAnalysis)
-
-    return []
-
-    # return [x.rulebase_id for x in analysis]
+    return [analysis.rulebase_id for analysis in optimizedAnalysis]
 
 
 
-def retrieve_unused_addresses(db, fw_id):
-    addresses = db.query(Address.member).filter(Address.fw_id == fw_id).all()
-    
-    return [address.member for address in addresses]
+
 
 # TODO: check rivions=0 rule for all of these
 
