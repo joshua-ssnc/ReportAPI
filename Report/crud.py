@@ -1,9 +1,11 @@
 import sys
+import os
 
-sys.path.append('..//Report')
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Report')))
 
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 import models, database
 from datetime import timedelta,datetime
 from openpyxl import Workbook
@@ -62,6 +64,23 @@ def get_rules(db: Session, fw_id: int):
 def get_log(db: Session, log_id: int):
     return db.query(models.SysLog).filter(models.SysLog.id == log_id).first()
 
+
+def get_report(db: Session, fw_id: int, type: str):
+    report = db.query(models.Report).filter(models.Report.fw_id == fw_id).first()
+
+    return report.jsondata if report else None
+
+def get_reports_info(db: Session):
+    reports_info = db.query(models.Report.fw_id, models.Report.update_ts).all()
+
+    return {
+        fw_id: {
+            "update_ts": update_ts.isoformat() if update_ts else None
+        }
+        for fw_id, update_ts in reports_info
+    }
+
+
 def analyze_rules(db: Session, fw_id: int):
     rules = db.query(models.Rule).filter(models.Rule.fw_id == fw_id).all()
     analyses = db.query(models.Analyze).filter(models.Analyze.fw_id == fw_id).all()
@@ -70,7 +89,35 @@ def analyze_rules(db: Session, fw_id: int):
     return check_rulebase.analyze(rules, analyses, complianceObjects, fw_id, db)
 
 
-    # return(schemas.RuleAnalysis(fw_id='1', rules_count={}))
+    # return(schemas.RuleAnalysis(fw_id='1', rules_count={}))    
+
+def generate_report(db: Session, firewall_id: int):
+    rules = get_rules(db, firewall_id)
+    ruleAnalysis = analyze_rules(db, firewall_id)
+
+    individualReport = { "fw_name": get_firewall(db, firewall_id).fw_name }
+    analyzedRules = []
+
+    for rule in rules:  # Start from row 2, as row 1 is for headers
+        newRule = {}
+        newRule["id"] = rule.id
+        newRule["action"] = rule.action
+        newRule["source"] = rule.source
+        newRule["from_ip"] = rule.from_ip
+        newRule["destination"] = rule.destination
+        newRule["to_ip"] = rule.to_ip
+        newRule["service"] = rule.service
+        newRule["expire"] = rule.expire
+        newRule["comment"] = rule.comment
+        
+        analyzedRules.append(newRule)
+    
+    individualReport["rules"] = analyzedRules
+    individualReport["types"] = ruleAnalysis.to_dict()
+    individualReport["scores"] = ruleAnalysis.category_scores(len(rules))
+
+    return individualReport
+
 
 
 def generate_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
@@ -132,6 +179,23 @@ def generate_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[
     return individualReport
 
 
+def store_report(db: Session, report_data, firewall_id: int):
+    report = db.query(models.Report).filter(models.Report.fw_id == firewall_id).first()
+
+    if report:
+        report.jsondata = report_data
+    else:
+        report = models.Report(
+            fw_id=firewall_id,
+            jsondata=report_data,
+        )
+        db.add(report)
+
+    db.commit()
+    db.refresh(report)
+
+    return report
+
         
 
 
@@ -160,10 +224,10 @@ def generate_firewall_report(db: Session):
     alignment = Alignment(horizontal="center", vertical="center")
     ws["A1"] = "Category"
     ws["A4"] = "Period Management"
-    ws["A6"] = "Utilization"
-    ws["A11"] = "Scope"
-    ws["A14"] = "Services"
-    ws["A17"] = "Compliance"
+    ws["A6"] = "Policy Utilization"
+    ws["A11"] = "Policy Scope"
+    ws["A14"] = "Service Safety"
+    ws["A17"] = "Security Compliance"
     ws["A24"] = "Miscellaneous"
     ws["B1"] = "Details"
     ws["C1"] = "Number of Applicable Rules"

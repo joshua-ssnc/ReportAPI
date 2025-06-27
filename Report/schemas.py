@@ -34,7 +34,7 @@ class Rule(BaseModel):
     comment: Optional[str] = None
     seq: Optional[int] = -1
     schedule: datetime
-    expire: datetime
+    expire: str
     apply_id: Optional[str] = None
     deleted: int
     sync: int

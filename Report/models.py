@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, DateTime, CheckConstraint
+from sqlalchemy import Column, Integer, String, DateTime, CheckConstraint, JSON, func
 from database import Base
 
 class Firewall(Base):
@@ -35,7 +35,7 @@ class Rule(Base):
     comment = Column(String, nullable=True)
     seq = Column(Integer, nullable=True)
     schedule = Column(DateTime, nullable=True)
-    expire = Column(DateTime, nullable=True)
+    expire = Column(String, nullable=True)
     apply_id = Column(String, nullable=True)
     deleted = Column(Integer)
     sync = Column(Integer)
@@ -111,9 +111,9 @@ class SysLog(Base):
     type = Column(String)
     subtype = Column(String)
     level = Column(String)
-    srcip = Column(Integer, index=True)
+    srcip = Column(String, index=True)
     srcport = Column(Integer)
-    dstip = Column(Integer, index=True)
+    dstip = Column(String, index=True)
     dstport = Column(Integer)
     dstintf = Column(String)
     policyid = Column(String, index=True)
@@ -129,3 +129,13 @@ class SysLog(Base):
     app = Column(String, nullable=True)
     hostname = Column(String, nullable=True)
     apprisk = Column(String, nullable=True)
+    times = Column(Integer)
+
+class Report(Base):
+    __tablename__ = "ag_report"
+
+    id = Column(Integer, primary_key=True)
+    fw_id = Column(Integer, index=True)
+    update_ts = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    jsondata = Column(JSON)
+

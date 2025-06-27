@@ -1,5 +1,5 @@
    
-1. Python3 Install
+1. Python3 Install (v 3.9)
    sudo apt update
    sudo apt install python3
    python3 --version 
@@ -18,9 +18,10 @@
    pip3 install openpyxl
    pip3 install sqlalchemy
    pip3 install pydantic
-    
+   pip3 install --only-binary :all: psycopg2-binary
+   
 4. Start program
-   python -m uvicorn my_main:app --host 0.0.0.0 --port 8081 --reload
+   python -m uvicorn main:app --host 0.0.0.0 --port 8081 --reload
 
 5. To generate the report, go to http://localhost:8081/firewalls/generate-report
 

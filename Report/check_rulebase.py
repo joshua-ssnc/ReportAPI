@@ -28,6 +28,74 @@ class RuleTypes:
         self.invalid = set()
         self.manual = set()
 
+    def to_dict(self):
+        return {k: list(v) for k, v in vars(self).items()}
+    
+    def score(self, total_rules: int) -> dict:
+        """
+        Returns a dictionary mapping rule type names to a score from 0 to 100.
+        Higher scores are better (fewer violations).
+        """
+        weights = {
+            "expired": 4,
+            "permanent": 2,
+            "redundant": 2,
+            "shadow": 3,
+            "unused": 1,
+            "unused_objects": 1,
+            "dst_excessiveopen": 3,
+            "port_excessiveopen": 3,
+            "knownportopen": 2,
+            "virusportopen": 5,
+            "mgmtportopen": 4,
+            "src_anyopen": 4,
+            "dst_anyopen": 4,
+            "noevidence": 2,
+            "compliancecheck": 1,
+            "disabled": 2,
+            "invalid": 3,
+            "manual": 2,
+        }
+
+        if total_rules == 0:
+            return {k: 100 for k in vars(self).keys()}
+
+        result = {}
+        for k, v in vars(self).items():
+            weight = weights.get(k, 1)
+            penalty = len(v) * weight
+            score = max(0, 100 * (1 - (penalty / total_rules)))
+            result[k] = round(score, 2)
+        return result
+
+    def category_scores(self, total_rules: int) -> dict:
+        """
+        Returns a dictionary mapping high-level categories to scores (0–100),
+        aggregated from their respective rule type scores.
+        """
+        category_mapping = {
+            "Period Management": ["expired", "permanent"],
+            "Policy Utilization": ["redundant", "shadow", "unused", "unused_objects"],
+            "Policy Scope": ["dst_excessiveopen", "port_excessiveopen"],
+            "Service Safety": ["knownportopen", "virusportopen", "mgmtportopen"],
+            "Security Compliance": ["src_anyopen", "dst_anyopen", "noevidence", "compliancecheck"],
+            "Miscellaneous": ["disabled", "invalid", "manual"],
+        }
+
+        type_scores = self.score(total_rules)
+        result = {}
+
+        for category, types in category_mapping.items():
+            scores = [type_scores.get(t, 100) for t in types]
+            if scores:
+                result[category] = round(sum(scores) / len(scores), 2)
+            else:
+                result[category] = 100.0
+
+        return result
+
+
+
 
 def is_valid_cidr(cidr):
     # Check if the input is a valid CIDR format
@@ -248,6 +316,7 @@ def analyze(rules, analyses, complianceObjects, fw_id, db):
 
 
 
+
 def retrieve_unused_objects(db, fw_id):
     # Query to transform the SysLog "service" column into separate protocol and port columns 
     syslogs = db.query(
@@ -269,7 +338,6 @@ def retrieve_unused_objects(db, fw_id):
     ).subquery()
 
     syslog_alias = aliased(syslogs, name='syslog_alias')
-
     existenceSubquery = db.query(syslog_alias.c.policyid).filter(
         and_(
             cast(Analyze.rulebase_id, String) == syslog_alias.c.policyid,
@@ -295,13 +363,15 @@ def retrieve_unused_objects(db, fw_id):
                 # For rules that deal with source IP addresses (ctype 2)
                 and_(
                     Analyze.ctype == 2,  # Type 2: Source IP address
-                    syslog_alias.c.srcip.between(Analyze.start_object, Analyze.end_object)
+                    # syslog_alias.c.srcip.between(Analyze.start_object, Analyze.end_object)
+                    func.cast(func.inet(syslog_alias.c.srcip) - func.inet(literal("0.0.0.0")), Integer).between(Analyze.start_object, Analyze.end_object)
                 ),
                 # For rules that deal with destination IP addresses (ctype 3)
                 and_(
                     Analyze.ctype == 3,  # Type 3: Destination IP address
                     # Destination IP range match (ctype 3)
-                    syslog_alias.c.dstip.between(Analyze.start_object, Analyze.end_object),
+                    # syslog_alias.c.dstip.between(Analyze.start_object, Analyze.end_object),
+                    func.cast(func.inet(syslog_alias.c.dstip) - func.inet(literal("0.0.0.0")), Integer).between(Analyze.start_object, Analyze.end_object)
                 )
             )
         )
@@ -359,9 +429,12 @@ def retrieve_unused_objects(db, fw_id):
 
 
 # TODO: check rivions=0 rule for all of these
+def parse_expiration(expiration):
+    date_str = expiration[3:]  # Extract YYYYMMDD
+    return datetime.strptime(date_str, "%Y%m%d")
 
 def check_expired(rule):
-    if rule.expire and rule.expire < datetime.now():
+    if rule.expire and parse_expiration(rule.expire) < datetime.now():
         return True
 
     return False
@@ -369,7 +442,7 @@ def check_expired(rule):
 
 def check_permanent(rule): 
     permanentDate = datetime(9999, 1, 1, 0, 0)
-    if rule.expire and rule.expire >= permanentDate:
+    if rule.expire and parse_expiration(rule.expire) >= permanentDate:
         return True
 
     return False
