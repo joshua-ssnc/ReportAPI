@@ -5,7 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'R
 
 
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 import models, database
 from datetime import timedelta,datetime
 from openpyxl import Workbook
@@ -64,63 +64,104 @@ def get_rules(db: Session, fw_id: int):
 def get_log(db: Session, log_id: int):
     return db.query(models.SysLog).filter(models.SysLog.id == log_id).first()
 
+def get_weights(db: Session):
+    return db.query(models.Weights).first()
 
-def get_report(db: Session, fw_id: int, type: str):
-    report = db.query(models.Report).filter(models.Report.fw_id == fw_id).first()
+def get_report(db: Session, report_id: int, type: str):
+    report = db.query(models.Report).filter(models.Report.id == report_id).first()
+    data = report.jsondata
 
-    return report.jsondata if report else None
+    if not report: 
+        return None
 
-def get_reports_info(db: Session):
-    reports_info = db.query(models.Report.fw_id, models.Report.update_ts).all()
+    if type == "security":
+        return data
+    elif type == "individual":
+        rules = []
+        for rule in data["rules"]:
+            rule_types = []
+            for type_name, rule_ids in data["types"].items():
+                if rule["id"] in rule_ids:
+                    rule_types.append(type_name)
+            
+            rules.append({ **rule, "types": rule_types })
 
-    return {
-        fw_id: {
-            "update_ts": update_ts.isoformat() if update_ts else None
+
+        return {
+            "fw_name": data["fw_name"],
+            "rules": rules
         }
-        for fw_id, update_ts in reports_info
+
+
+
+
+
+def get_report_history(db: Session, fw_id: int):
+    reports = (
+        db.query(models.Report.id, models.Report.update_ts)
+        .filter(models.Report.fw_id == fw_id)
+        .order_by(models.Report.update_ts.desc())
+        .all()
+    )
+
+    return [
+        {
+            "reportId": report.id,
+            "update_ts": report.update_ts.isoformat() if report.update_ts else None,
+        }
+        for report in reports
+    ]
+
+def get_most_recent_reports(db: Session, fw_ids: Union[list[int], None] = None):
+    subquery_query = db.query(
+        models.Report.fw_id,
+        func.max(models.Report.update_ts).label("latest_ts")
+    )
+
+    if fw_ids is not None:
+        subquery_query = subquery_query.filter(models.Report.fw_id.in_(fw_ids))
+
+    subquery = subquery_query.group_by(models.Report.fw_id).subquery()
+
+    results = (
+        db.query(models.Report)
+        .join(subquery, (models.Report.fw_id == subquery.c.fw_id) & (models.Report.update_ts == subquery.c.latest_ts))
+        .all()
+    )
+
+    return results
+
+def get_reports(argos_db: Session, report_db: Session, fw_ids: Union[list[int], None] = None):
+    latest_reports = get_most_recent_reports(report_db, fw_ids)
+
+    all_report_fw_ids = (
+        report_db.query(models.Report.fw_id, models.Report.jsondata)
+        .distinct(models.Report.fw_id)
+        .all()
+    )
+
+    id_to_name = {
+        fw_id: jsondata["fw_name"]
+        for fw_id, jsondata in all_report_fw_ids
     }
 
-
-def analyze_rules(db: Session, fw_id: int):
-    rules = db.query(models.Rule).filter(models.Rule.fw_id == fw_id).all()
-    analyses = db.query(models.Analyze).filter(models.Analyze.fw_id == fw_id).all()
-    complianceObjects = db.query(models.ComplianceObject).filter(models.ComplianceObject.type == "wn" or models.ComplianceObject.type == "vi" or models.ComplianceObject.type == "mn").all()
-
-    return check_rulebase.analyze(rules, analyses, complianceObjects, fw_id, db)
-
-
-    # return(schemas.RuleAnalysis(fw_id='1', rules_count={}))    
-
-def generate_report(db: Session, firewall_id: int):
-    rules = get_rules(db, firewall_id)
-    ruleAnalysis = analyze_rules(db, firewall_id)
-
-    individualReport = { "fw_name": get_firewall(db, firewall_id).fw_name }
-    analyzedRules = []
-
-    for rule in rules:  # Start from row 2, as row 1 is for headers
-        newRule = {}
-        newRule["id"] = rule.id
-        newRule["action"] = rule.action
-        newRule["source"] = rule.source
-        newRule["from_ip"] = rule.from_ip
-        newRule["destination"] = rule.destination
-        newRule["to_ip"] = rule.to_ip
-        newRule["service"] = rule.service
-        newRule["expire"] = rule.expire
-        newRule["comment"] = rule.comment
-        
-        analyzedRules.append(newRule)
+    return {
+        "idToName": id_to_name,
+        "requestedFwData": {
+            report.fw_id: {
+                # "update_ts": report.update_ts.isoformat() if report.update_ts else None,
+                "reportId": report.id,
+                "fwName": report.jsondata["fw_name"],
+                **{k: len(v) for k, v in report.jsondata["types"].items()},
+            }
+            for report in latest_reports
+        }
+    }
     
-    individualReport["rules"] = analyzedRules
-    individualReport["types"] = ruleAnalysis.to_dict()
-    individualReport["scores"] = ruleAnalysis.category_scores(len(rules))
-
-    return individualReport
 
 
 
-def generate_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
+def get_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
     ruletypes = ['expired','permanent','redundant','shadow','unused', 'unused_objects', 'dst_excessiveopen', 'port_excessiveopen', 'knownportopen', 'virusportopen', 'mgmtportopen', 'src_anyopen', 'dst_anyopen', 'noevidence', 'compliancecheck', 'disabled', 'invalid', 'manual']
     # ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
 
@@ -179,28 +220,86 @@ def generate_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[
     return individualReport
 
 
+
+def analyze_rules(db: Session, fw_id: int):
+    rules = db.query(models.Rule).filter(models.Rule.fw_id == fw_id).all()
+    analyses = db.query(models.Analyze).filter(models.Analyze.fw_id == fw_id).all()
+    complianceObjects = db.query(models.ComplianceObject).filter(models.ComplianceObject.type == "wn" or models.ComplianceObject.type == "vi" or models.ComplianceObject.type == "mn").all()
+
+    return check_rulebase.analyze(rules, analyses, complianceObjects, fw_id, db)
+
+
+    # return(schemas.RuleAnalysis(fw_id='1', rules_count={}))    
+
+def generate_report(argos_db: Session, report_db: Session, firewall_id: int):
+    rules = get_rules(argos_db, firewall_id)
+    ruleAnalysis = analyze_rules(argos_db, firewall_id)
+
+    weights = get_weights()
+
+    individualReport = { "fw_name": get_firewall(argos_db, firewall_id).fw_name }
+    analyzedRules = []
+
+    for rule in rules:  # Start from row 2, as row 1 is for headers
+        newRule = {}
+        newRule["id"] = rule.id
+        newRule["action"] = rule.action
+        newRule["source"] = rule.source
+        newRule["from_ip"] = rule.from_ip
+        newRule["destination"] = rule.destination
+        newRule["to_ip"] = rule.to_ip
+        newRule["service"] = rule.service
+        newRule["expire"] = rule.expire
+        newRule["comment"] = rule.comment
+        
+        analyzedRules.append(newRule)
+    
+    individualReport["rules"] = analyzedRules
+    individualReport["types"] = ruleAnalysis.to_dict()
+    individualReport["scores"] = ruleAnalysis.category_scores(weights, len(rules))
+
+    return individualReport
+
+
 def store_report(db: Session, report_data, firewall_id: int):
-    report = db.query(models.Report).filter(models.Report.fw_id == firewall_id).first()
-
-    if report:
-        report.jsondata = report_data
-    else:
-        report = models.Report(
-            fw_id=firewall_id,
-            jsondata=report_data,
-        )
-        db.add(report)
-
+    report = models.Report(
+        fw_id=firewall_id,
+        jsondata=report_data,
+    )
+    db.add(report)
     db.commit()
-    db.refresh(report)
 
     return report
+
+def update_weights(db: Session, new_weights: dict):
+    weights = db.query(models.Weights).first()
+    if not weights:
+        weights = models.Weights()
+        db.add(weights)
+
+    for key, value in new_weights.items():
+        if hasattr(weights, key):
+            setattr(weights, key, value)
+
+    db.commit()
+    return weights
+
+
+def get_reports_info(db: Session):
+    latest_reports = get_most_recent_reports(db)
+    return {
+        report.fw_id: {
+            "update_ts": report.update_ts.isoformat() if report.update_ts else None,
+            "report_id": report.id
+        }
+        for report in latest_reports
+    }
 
         
 
 
     
-def generate_firewall_report(db: Session):
+def generate_report_file(db: Session):
     # Fetch firewall data from the database
     firewalls = get_firewalls(db, None)
     endCol = get_column_letter(3 + len(firewalls))
@@ -371,3 +470,4 @@ def generate_firewall_report(db: Session):
     output.seek(0)
     
     return output
+

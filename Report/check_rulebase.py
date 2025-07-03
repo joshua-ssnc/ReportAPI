@@ -31,32 +31,11 @@ class RuleTypes:
     def to_dict(self):
         return {k: list(v) for k, v in vars(self).items()}
     
-    def score(self, total_rules: int) -> dict:
+    def score(self, weights: dict, total_rules: int) -> dict:
         """
         Returns a dictionary mapping rule type names to a score from 0 to 100.
         Higher scores are better (fewer violations).
         """
-        weights = {
-            "expired": 4,
-            "permanent": 2,
-            "redundant": 2,
-            "shadow": 3,
-            "unused": 1,
-            "unused_objects": 1,
-            "dst_excessiveopen": 3,
-            "port_excessiveopen": 3,
-            "knownportopen": 2,
-            "virusportopen": 5,
-            "mgmtportopen": 4,
-            "src_anyopen": 4,
-            "dst_anyopen": 4,
-            "noevidence": 2,
-            "compliancecheck": 1,
-            "disabled": 2,
-            "invalid": 3,
-            "manual": 2,
-        }
-
         if total_rules == 0:
             return {k: 100 for k in vars(self).keys()}
 
@@ -68,7 +47,7 @@ class RuleTypes:
             result[k] = round(score, 2)
         return result
 
-    def category_scores(self, total_rules: int) -> dict:
+    def category_scores(self, weights, total_rules: int) -> dict:
         """
         Returns a dictionary mapping high-level categories to scores (0–100),
         aggregated from their respective rule type scores.
@@ -82,7 +61,7 @@ class RuleTypes:
             "Miscellaneous": ["disabled", "invalid", "manual"],
         }
 
-        type_scores = self.score(total_rules)
+        type_scores = self.score(weights, total_rules)
         result = {}
 
         for category, types in category_mapping.items():
