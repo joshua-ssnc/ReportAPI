@@ -161,66 +161,6 @@ def get_reports(argos_db: Session, report_db: Session, fw_ids: Union[list[int], 
 
 
 
-def get_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
-    ruletypes = ['expired','permanent','redundant','shadow','unused', 'unused_objects', 'dst_excessiveopen', 'port_excessiveopen', 'knownportopen', 'virusportopen', 'mgmtportopen', 'src_anyopen', 'dst_anyopen', 'noevidence', 'compliancecheck', 'disabled', 'invalid', 'manual']
-    # ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
-
-    # The report will include all firewalls
-    if firewall_id == -1:
-        all_firewalls = get_firewalls(db, None)
-        firewalls = get_firewalls(db, fw_ids)
-
-        firewallReport = {"idToName": {}, "requestedFwData": {}}
-
-        if not firewalls:
-            raise Exception("No firewall data found")
-        
-        for firewall in all_firewalls:
-            if fw_ids is None or firewall.id in fw_ids:
-                firewallData = analyze_rules(db, firewall.id)
-
-                for ruletype in ruletypes:
-                    setattr(firewallData, ruletype, len(getattr(firewallData, ruletype)))
-                setattr(firewallData, "name", firewall.name)
-                
-                firewallReport["requestedFwData"][firewall.id] = firewallData
-
-            firewallReport["idToName"][firewall.id] = firewall.name
-        
-        return firewallReport
-    
-    # we are generating report data for an individual firewall
-    rules = get_rules(db, firewall_id)
-    ruleAnalysis = analyze_rules(db, firewall_id)
-
-    individualReport = { "fw_name": get_firewall(db, firewall_id).fw_name }
-    analyzedRules = []
-
-    for rule in rules:  # Start from row 2, as row 1 is for headers
-        newRule = {}
-        newRule["id"] = rule.id
-        newRule["action"] = rule.action
-        newRule["source"] = rule.source
-        newRule["from_ip"] = rule.from_ip
-        newRule["destination"] = rule.destination
-        newRule["to_ip"] = rule.to_ip
-        newRule["service"] = rule.service
-        newRule["expire"] = rule.expire
-        newRule["comment"] = rule.comment
-        newRule["types"] = []
-
-        for type, ruleSet in vars(ruleAnalysis).items():
-            if len(ruleSet) > 0 and rule.id in ruleSet:
-                newRule["types"].append(type)
-        
-        analyzedRules.append(newRule)
-    
-    individualReport["rules"] = analyzedRules
-
-    return individualReport
-
-
-
 def analyze_rules(db: Session, fw_id: int):
     rules = db.query(models.Rule).filter(models.Rule.fw_id == fw_id).all()
     analyses = db.query(models.Analyze).filter(models.Analyze.fw_id == fw_id).all()
@@ -235,9 +175,9 @@ def generate_report(argos_db: Session, report_db: Session, firewall_id: int):
     rules = get_rules(argos_db, firewall_id)
     ruleAnalysis = analyze_rules(argos_db, firewall_id)
 
-    weights = get_weights()
+    weights = get_weights(report_db)
 
-    individualReport = { "fw_name": get_firewall(argos_db, firewall_id).fw_name }
+    individualReport = { "fw_name": get_firewall(argos_db, firewall_id).name }
     analyzedRules = []
 
     for rule in rules:  # Start from row 2, as row 1 is for headers
@@ -256,7 +196,7 @@ def generate_report(argos_db: Session, report_db: Session, firewall_id: int):
     
     individualReport["rules"] = analyzedRules
     individualReport["types"] = ruleAnalysis.to_dict()
-    individualReport["scores"] = ruleAnalysis.category_scores(weights, len(rules))
+    individualReport["scores"] = ruleAnalysis.category_scores(weights.to_dict(), len(rules))
 
     return individualReport
 
@@ -299,13 +239,14 @@ def get_reports_info(db: Session):
 
 
     
-def generate_report_file(db: Session):
+def generate_report_file(report_db: Session, fw_ids: Union[list[int], None] = None):
     # Fetch firewall data from the database
-    firewalls = get_firewalls(db, None)
-    endCol = get_column_letter(3 + len(firewalls))
+    reports = get_most_recent_reports(report_db, fw_ids)
 
-    if not firewalls:
-        raise Exception("No firewall data found")
+    endCol = get_column_letter(3 + len(reports))
+
+    if not reports:
+        raise Exception("No report data found")
         # raise HTTPException(status_code=404, detail="No firewall data found")
     
     # Create a new Excel workbook
@@ -393,16 +334,20 @@ def generate_report_file(db: Session):
     ws.column_dimensions[endCol].width = 15
     
 
-    for main_col_num, firewall in enumerate(firewalls, 3):
-        rules = get_rules(db, firewall.id)
+    for main_col_num, report in enumerate(reports, 3):
+        # rules = get_rules(argos_db, report.fw_id)
+        reportData = report.jsondata
+        rules = reportData["rules"]
+        fw_name = reportData["fw_name"]
 
-        ws.cell(row=3, column=main_col_num, value=firewall.name)
+        ws.cell(row=3, column=main_col_num, value=fw_name)
         ws.column_dimensions[get_column_letter(main_col_num)].width = 15
 
-        ruleAnalysis = analyze_rules(db=db, fw_id=firewall.id)
+        # ruleAnalysis = analyze_rules(db=db, fw_id=firewall.id)
+        ruleAnalysis = reportData["types"]
         
         if rules:
-            sheet = wb.create_sheet(title=f"{firewall.name}")
+            sheet = wb.create_sheet(title=f"{fw_name}")
 
             curr_row = 2
 
@@ -414,18 +359,18 @@ def generate_report_file(db: Session):
             for rule in rules:  # Start from row 2, as row 1 is for headers
                 start_row = curr_row
 
-                sheet.cell(row=curr_row, column=1, value=rule.id)
-                sheet.cell(row=curr_row, column=2, value=rule.action)
-                sheet.cell(row=curr_row, column=3, value=rule.source)
-                sheet.cell(row=curr_row, column=4, value=rule.from_ip)
-                sheet.cell(row=curr_row, column=5, value=rule.destination)
-                sheet.cell(row=curr_row, column=6, value=rule.to_ip)
-                sheet.cell(row=curr_row, column=7, value=rule.service)
-                sheet.cell(row=curr_row, column=8, value=rule.expire)
-                sheet.cell(row=curr_row, column=9, value=rule.comment)
+                sheet.cell(row=curr_row, column=1, value=rule["id"])
+                sheet.cell(row=curr_row, column=2, value=rule["action"])
+                sheet.cell(row=curr_row, column=3, value=rule["source"])
+                sheet.cell(row=curr_row, column=4, value=rule["from_ip"])
+                sheet.cell(row=curr_row, column=5, value=rule["destination"])
+                sheet.cell(row=curr_row, column=6, value=rule["to_ip"])
+                sheet.cell(row=curr_row, column=7, value=rule["service"])
+                sheet.cell(row=curr_row, column=8, value=rule["expire"])
+                sheet.cell(row=curr_row, column=9, value=rule["comment"])
 
-                for type, ruleSet in vars(ruleAnalysis).items():
-                    if len(ruleSet) > 0 and rule.id in ruleSet:
+                for type, ruleSet in ruleAnalysis.items():
+                    if len(ruleSet) > 0 and rule["id"] in ruleSet:
                         sheet.cell(row=curr_row, column=10, value=ruletypeStrs[type])
                         curr_row += 1
 
@@ -454,13 +399,14 @@ def generate_report_file(db: Session):
 
         for row_num in range(4, 35):
             if row_num in ruletypeRows:
-                ws.cell(row=row_num, column=main_col_num, value=len(getattr(ruleAnalysis, ruletypeRows[row_num])))
+                ws.cell(row=row_num, column=main_col_num, value=len(ruleAnalysis[ruletypeRows[row_num]]))
+                # ws.cell(row=row_num, column=main_col_num, value=len(getattr(ruleAnalysis, ruletypeRows[row_num])))
             else:
                 ws.cell(row=row_num, column=main_col_num, value=0)
     
-    for row in ws.iter_rows(min_row=4, max_row=ws.max_row, min_col=3, max_col=2 + len(firewalls)):
+    for row in ws.iter_rows(min_row=4, max_row=ws.max_row, min_col=3, max_col=2 + len(reports)):
         row_sum = sum(cell.value for cell in row)
-        ws.cell(row=row[0].row, column=3 + len(firewalls), value=row_sum)
+        ws.cell(row=row[0].row, column=3 + len(reports), value=row_sum)
 
     # Create an in-memory binary stream for the Excel file
     output = BytesIO()
@@ -471,3 +417,63 @@ def generate_report_file(db: Session):
     
     return output
 
+
+
+
+def get_report_data(db: Session, firewall_id: int = -1, fw_ids: Union[list[int], None] = None):
+    ruletypes = ['expired','permanent','redundant','shadow','unused', 'unused_objects', 'dst_excessiveopen', 'port_excessiveopen', 'knownportopen', 'virusportopen', 'mgmtportopen', 'src_anyopen', 'dst_anyopen', 'noevidence', 'compliancecheck', 'disabled', 'invalid', 'manual']
+    # ruletypeStrs = {'expired': 'Expired Rule', 'permanent': 'Permanent Rule', 'redundant': 'Redundant Rule', 'shadow': 'Shadow Rule', 'unused': 'Unused Rule', 'unused_objects': 'Unused Objects (Session-Based)', 'dst_excessiveopen': 'Dst Excessive Open', 'port_excessiveopen': 'Service Excessive Open', 'knownportopen': 'Well-Known Port Open', 'virusportopen': 'Virus Port Open', 'mgmtportopen': 'Mgmt Port Open', 'src_anyopen': 'Src ANY Open', 'dst_anyopen': 'Dst ANY Open', 'noevidence': 'NOEVIDENCE Rule', 'compliancecheck': 'Compliance', 'disabled': 'Inactive Rule', 'invalid': 'Invalid Rule', 'manual': 'Manual Rule'}
+
+    # The report will include all firewalls
+    if firewall_id == -1:
+        all_firewalls = get_firewalls(db, None)
+        firewalls = get_firewalls(db, fw_ids)
+
+        firewallReport = {"idToName": {}, "requestedFwData": {}}
+
+        if not firewalls:
+            raise Exception("No firewall data found")
+        
+        for firewall in all_firewalls:
+            if fw_ids is None or firewall.id in fw_ids:
+                firewallData = analyze_rules(db, firewall.id)
+
+                for ruletype in ruletypes:
+                    setattr(firewallData, ruletype, len(getattr(firewallData, ruletype)))
+                setattr(firewallData, "name", firewall.name)
+                
+                firewallReport["requestedFwData"][firewall.id] = firewallData
+
+            firewallReport["idToName"][firewall.id] = firewall.name
+        
+        return firewallReport
+    
+    # we are generating report data for an individual firewall
+    rules = get_rules(db, firewall_id)
+    ruleAnalysis = analyze_rules(db, firewall_id)
+
+    individualReport = { "fw_name": get_firewall(db, firewall_id).fw_name }
+    analyzedRules = []
+
+    for rule in rules:  # Start from row 2, as row 1 is for headers
+        newRule = {}
+        newRule["id"] = rule.id
+        newRule["action"] = rule.action
+        newRule["source"] = rule.source
+        newRule["from_ip"] = rule.from_ip
+        newRule["destination"] = rule.destination
+        newRule["to_ip"] = rule.to_ip
+        newRule["service"] = rule.service
+        newRule["expire"] = rule.expire
+        newRule["comment"] = rule.comment
+        newRule["types"] = []
+
+        for type, ruleSet in vars(ruleAnalysis).items():
+            if len(ruleSet) > 0 and rule.id in ruleSet:
+                newRule["types"].append(type)
+        
+        analyzedRules.append(newRule)
+    
+    individualReport["rules"] = analyzedRules
+
+    return individualReport

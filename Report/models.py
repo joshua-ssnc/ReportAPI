@@ -170,3 +170,9 @@ class Weights(Base):
     manual = Column(Integer, default=0, server_default="0")
     unregistered = Column(Integer, default=0, server_default="0")
     nozone = Column(Integer, default=0, server_default="0")
+
+    def to_dict(self):
+        return {
+            c.name: getattr(self, c.name)
+            for c in self.__table__.columns
+        }

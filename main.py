@@ -14,9 +14,9 @@ log_level = log.INFO
 
 
 @app.get("/firewalls/download-report")
-def generate_report_file(db: Session = Depends(database.get_argos_db)): 
-    # Return the generated Excel file as a StreamingResponse
-    return StreamingResponse(crud.generate_report_file(db), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=firewall_report.xlsx"})
+def generate_report_file(report_db: Session = Depends(database.get_report_db), fw_ids: Annotated[Union[list[int], None], Query()] = None): 
+    # Return the generated Excel file as a StreamingResponse]
+    return StreamingResponse(crud.generate_report_file(report_db, fw_ids), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=firewall_report.xlsx"})
 
 
 @app.get("/firewalls/get-comprehensive-report")
