@@ -3,7 +3,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Report')))
 
-
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import models, database
@@ -43,11 +43,12 @@ def DrawLine(sheet,nRow,nCol):
                                                     bottom=Side(border_style=BORDER_THIN,
                                                     color='000000'))
 
-# Get firewall by ID
 def get_firewall(db: Session, firewall_id: int):
-    return db.query(models.Firewall).filter(models.Firewall.id == firewall_id).first()
+    firewall=  db.query(models.Firewall).filter(models.Firewall.id == firewall_id).first()
+    if not firewall:
+        raise HTTPException(status_code=404, detail=f"Firewall with id {firewall_id} not found")
+    return firewall 
 
-# Get all firewalls
 def get_firewalls(db: Session, fw_ids: Union[list[int], None], skip: int = 0, limit: int = 10):
     if fw_ids != None:
         return db.query(models.Firewall).filter(models.Firewall.id.in_(fw_ids)).all()
@@ -69,6 +70,9 @@ def get_weights(db: Session):
 
 def get_report(db: Session, report_id: int, type: str):
     report = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Report with id {report_id} not found")
+    
     data = report.jsondata
 
     if not report: 
