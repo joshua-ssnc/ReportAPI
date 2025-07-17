@@ -1,7 +1,6 @@
 import re
 from sqlalchemy.orm import aliased
-from sqlalchemy import Integer, String, cast, func, case, literal, and_, or_, not_, exists
-import models, database
+from sqlalchemy import Integer, String, cast, func, case, literal, and_, or_
 from datetime import datetime
 import ipaddress
 from models import SysLog, Rule, Service, Address, Analyze

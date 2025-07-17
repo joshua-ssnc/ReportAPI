@@ -1,14 +1,22 @@
+import sys
+import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
 from fastapi import Depends
-#from .config import settings  # Assume you have a settings file for DB config
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Common')))
+
+from Config import Config
+
+config = Config() 
+settings = config.GetConfig("PushDB")
 
 # Define the database URL
-#SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
-SQLALCHEMY_DATABASE_URL = f"postgresql://argosuser:Fridaynight1!@192.168.7.178:5432/argosdb"
+SQLALCHEMY_DATABASE_URL = f"postgresql://{settings['userID']}:{settings['password']}@{settings['serverIP']}:5432/{settings['database']}"
+# SQLALCHEMY_DATABASE_URL = f"postgresql://argosuser:Fridaynight1!@192.168.7.178:5432/argosdb"
 
 # Create the database engine
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"options": "-c search_path=argos_firewall"})

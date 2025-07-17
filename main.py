@@ -1,5 +1,9 @@
 
+import sys
+import os
 import logging as log
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.', 'Report')))
 
 from fastapi import FastAPI,Depends,Query,Body # type: ignore
 from fastapi.responses import StreamingResponse
@@ -7,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing  import Annotated, Union
 from pydantic import BaseModel # type: ignore
-from Report import database, crud
+import database, crud
 
 app = FastAPI()
 log_level = log.INFO

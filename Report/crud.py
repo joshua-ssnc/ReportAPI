@@ -1,20 +1,19 @@
 import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Report')))
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Report')))
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-import models, database
+import models
 from datetime import timedelta,datetime
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Side, Border, Alignment
 from io import BytesIO
 from typing import Union
-import schemas, check_rulebase
-from collections import defaultdict
+import check_rulebase
 
 
 # openpyxl border styles
@@ -213,7 +212,7 @@ def store_report(db: Session, report_data, firewall_id: int):
     db.add(report)
     db.commit()
 
-    return report
+    return report.id
 
 def update_weights(db: Session, new_weights: dict):
     weights = db.query(models.Weights).first()
